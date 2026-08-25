@@ -42,3 +42,51 @@ WISo myrangoube!
 KENob&y, wardsal thes ghesthinin couk ay aney IOUSts I&fr y ce.
 J
 ```
+
+this time, position embedding was added and the generation logic was changed.
+and an extra linear layer.
+
+```
+step 0: train loss 4.4801, val loss 4.4801
+step 300: train loss 2.5404, val loss 2.5566
+step 600: train loss 2.5160, val loss 2.5335
+step 900: train loss 2.4967, val loss 2.5149
+step 1200: train loss 2.5106, val loss 2.5254
+step 1500: train loss 2.4853, val loss 2.5109
+step 1800: train loss 2.4966, val loss 2.5198
+step 2100: train loss 2.4949, val loss 2.5100
+step 2400: train loss 2.4937, val loss 2.5102
+step 2700: train loss 2.5040, val loss 2.5114
+
+
+
+CExthantrid owindikis s, bll
+
+HAPen bube t e.
+S:
+O:
+IS:
+Folatangs:
+Wanthar u qurthe. bar dilasoate awice my.
+
+Hastatom o mup
+Yowhthatof isth ble mil; dilll,
+
+W:
+
+Ye s, hain latisttid ov ts, and Wh pomano.
+Swanous l lind me l.
+MIshe ce hiry ptupr aisspllw y. w'stoul noroopetelaves
+Momy ll, d mothake o Windo wh t eiibys the m douris TENGByore s poo mo th; te
+
+AN ad nthrupt f s ar irist m:
+
+Thin maleronth, af Pre?
+
+Whio myr f-
+LI har,
+S:
+
+
+Thardsal this ghesthidin cour ay aney Iry ts I f my ce hy
+```
