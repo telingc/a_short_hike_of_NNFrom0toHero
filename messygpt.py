@@ -3,17 +3,17 @@ import torch.nn as nn
 from torch.nn import functional as F
 
 # hyperparameters
-batch_size    = 32
-block_size    = 8
-max_iters     = 3000
-eval_interval = 300
-learning_rate = 1e-2
+batch_size    = 64
+block_size    = 256
+max_iters     = 5000
+eval_interval = 500
+learning_rate = 3e-4
 device        = 'cuda' if torch.cuda.is_available() else 'cpu'
 eval_iters    = 200
-n_embd = 32
-# n_head = 6
-# n_layer = 6
-# dropout = 0.2
+n_embd = 384
+n_head = 6
+n_layer = 6
+dropout = 0.2
 # ---------------
 
 torch.manual_seed(1337)
@@ -56,41 +56,119 @@ def estimate_loss():
     model.train()
     return out
 
-# class Head(nn.Module):
-#     """one head of self-attention."""
-#
-#     def __init__(self, head_size):
-#         super().__init__()
-#         self.key   = nn.Linear(n_embd, head_size, bias = False)
-#         self.query = nn.Linear(n_embd, head_size, bias = False)
-#         self.value = nn.Linear(n_embd, head_size, bias = False)
-#         self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)))
-#
-#         self.dropout = nn.Dropout(dropout)
-#
-#     def forward(self, x):
-#
-#         B, T, C = x.shape
-#         k = self.key(x)
-#         q = self.query(x)
-#
-#         wei = q @ k.transpose(-2, -1) * k.shape[-1] ** -0.5
-#         wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf')) # (B, T, T)
-#         wei = F.softmax(wei, dim=-1) # (B, T, T)
-#         wei = self.dropout(wei)
-#         v = self.value(x)
-#         out = wei @ v
-#         return out
+class Head(nn.Module):
+    """one head of self-attention."""
 
-# class MultiHeadAttention(nn.Module):
-#     """multiple heads of self-attention in parallel."""
-#
-#     def __init__(self, num_heads, head_size):
-#         super().__init__()
-#         self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
-#
-#     def forward(self, x):
-#         return torch.cat([h(x) for h in self.heads], dim=-1)
+    def __init__(self, head_size):
+        super().__init__()
+        self.key   = nn.Linear(n_embd, head_size, bias = False)
+        self.query = nn.Linear(n_embd, head_size, bias = False)
+        self.value = nn.Linear(n_embd, head_size, bias = False)
+        self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)))
+
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+
+        B, T, C = x.shape
+        k = self.key(x)
+        q = self.query(x)
+
+        wei = q @ k.transpose(-2, -1) * C ** -0.5
+        wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf')) # (B, T, T)
+        wei = F.softmax(wei, dim=-1) # (B, T, T)
+        wei = self.dropout(wei)
+        v = self.value(x)
+        out = wei @ v
+        return out
+
+class MultiHeadAttention(nn.Module):
+    """multiple heads of self-attention in parallel."""
+
+    def __init__(self, num_heads, head_size):
+        super().__init__()
+        self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
+        self.proj  = nn.Linear(num_heads * head_size, n_embd)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        out = torch.cat([h(x) for h in self.heads], dim=-1)
+        out = self.proj(out)
+        return out
+
+class FeedForward(nn.Module):
+    """a simple linear layer followed by a non-linearity."""
+
+    def __init__(self, n_embd):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(n_embd, 4 * n_embd),
+            nn.ReLU(),
+            nn.Linear(4 * n_embd, n_embd), # Projection in Sequential container. proj going back to residual way.
+            nn.Dropout(dropout),
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+class Block(nn.Module):
+    """Transformer block, communication followed by computation."""
+
+    def __init__(self, n_embd, n_head):
+        # n_embd:embedding dimension, n_head: the number of heads we'd like.
+        super().__init__()
+        head_size = n_embd // n_head
+        self.sa = MultiHeadAttention(n_head, head_size)
+        self.ffwd = FeedForward(n_embd)
+        self.ln1 = nn.LayerNorm(n_embd)
+        self.ln2 = nn.LayerNorm(n_embd)
+
+    def forward(self, x):
+        x = x + self.sa(self.ln1(x))
+        x = x + self.ffwd(self.ln1(x))
+        return x
+
+class LayerNorm:
+    """affine will be true which means using gamma and beta during training.
+    track_running_stats will be true, keep tracking running mean and variance.
+    device by default is cpu(but i hope is gpu.).
+    datatype float32.
+    """
+    def __init__(self, dim, eps = 1e-5, momentum = 0.1):
+        self.eps      = eps
+        # self.momentum = momentum
+        # self.training = True
+
+        # parameters (trained with backprop.)
+        self.gamma = torch.ones(dim)
+        self.beta  = torch.zeros(dim)
+
+        # buffers (trained with a running momentum update)
+        # self.running_mean = torch.zeros(dim)
+        # self.running_var  = torch.ones(dim)
+
+    def __call__(self, x):
+        # calculate the forward pass.
+        # if self.training:
+        #     # if x.ndim == 2:
+        #     #     dim = 0
+        #     # elif x.ndim == 3:
+        #     #     dim = (0, 1)
+        #     xmean = x.mean(1, keepdim = True) # batch mean
+        #     xvar  =  x.var(1, keepdim = True)  # batch variance
+        # else:
+        xmean = self.running_mean
+        xvar  = self.running_var
+        xhat = (x - xmean) / torch.sqrt(xvar + self.eps) # normalized to unit variance
+        self.out = self.gamma * xhat + self.beta
+        # if self.training:
+        #     with torch.no_grad():
+        #         self.running_mean = (1 - self.momentum) * self.running_mean + self.momentum * xmean
+        #         self.running_var  = (1 - self.momentum) * self.running_var + self.momentum * xvar
+        return self.out
+
+    def parameters(self):
+        return [self.gamma, self.beta]
 
 # super simple bigram model
 class BigramLanguageModel(nn.Module):
@@ -100,16 +178,26 @@ class BigramLanguageModel(nn.Module):
         # each token directly reads off the logits for the next token from a lookup table
         self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
         self.position_embedding_table = nn.Embedding(block_size, n_embd)
-        # self.sa_heads = MultiHeadAttention(num_heads = 4, head_size = n_embd // 4)
+        self.blocks = nn.Sequential(
+            Block(n_embd, n_head = 4),
+            Block(n_embd, n_head = 4),
+            Block(n_embd, n_head = 4),
+            nn.LayerNorm(n_embd),
+        )
+        # self.sa_heads = MultiHeadAttention(4, n_embd // 4)
+        # self.ffwd = FeedForward(n_embd)
         self.lm_head = nn.Linear(n_embd, vocab_size) # short for language model head.
 
     def forward(self, idx, targets=None):
         B, T = idx.shape
+
         # idx and targets are both (B,T) tensor of integers
         tok_emb = self.token_embedding_table(idx) # (B,T,C)
         pos_emb = self.position_embedding_table(torch.arange(T, device = device))
-        x = tok_emb + pos_emb
-        # x = self.sa_heads(x)
+        x       = tok_emb + pos_emb
+        # x       = self.sa_heads(x)
+        # x       = self.ffwd(x)
+        x       = self.blocks(x)
         logits  = self.lm_head(x)
 
         # logits = self.token_embedding_table(idx)
