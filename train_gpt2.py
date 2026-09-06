@@ -16,6 +16,7 @@ class CausalSelfAttention(nn.Module):
         assert config.n_embd % config.n_head == 0
         self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd)
         self.c_proj = nn.Linear(config.n_embd, config.n_embd)
+        self.c_proj.NANOGPT_SCALE_INIT = 1
         self.n_head = config.n_head
         self.n_embd = config.n_embd
         self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size)
@@ -90,6 +91,24 @@ class GPT(nn.Module):
 
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias = False)
 
+        # weight sharing scheme
+        self.transformer.wte.weight = self.lm_head.weight
+
+        # init params
+        self.apply(self._init_weights)
+
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            std = 0.02
+            if hasattr(module, 'NANOGPT_SCALE_INIT'):
+                std *= (2 * self.config.n_layer) ** -0.5
+            nn.init.normal_(module.weight, mean = 0.0, std = std)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            nn.init.normal_(module.weight, mean = 0.0, std = 0.02)
+
+
     def forward(self, idx, targets=None):
         # idx is of shape (B, T)
         B, T = idx.size()
@@ -160,6 +179,33 @@ class GPT(nn.Module):
         return model
 
 # ---
+
+class DataLoaderLite:
+    def __init__(self, B, T):
+        self.B = B
+        self.T = T
+
+        with open('src/input.txt', 'r') as f:
+            text = f.read()
+        enc = tiktoken.get_encoding('gpt2')
+        tokens = enc.encode(text)
+        self.tokens = torch.tensor(tokens)
+
+        print(f"loaded {len(self.tokens)} tokens.")
+        print(f"1 epoch = {len(self.tokens) // (B * T)} batches.")
+        self.current_position = 0
+
+    def next_batch(self):
+        B, T = self.B, self.T
+        buf = self.tokens[self.current_position : self.current_position + B * T + 1]
+        x = (buf[:-1]).view(B, T)
+        y = (buf[1: ]).view(B, T)
+        self.current_position += B*T
+        if self.current_position + (B * T + 1) > len(self.tokens):
+            self.current_position = 0
+        return x, y
+
+# ---
 device = "cpu"
 if torch.cuda.is_available():
     device = 'cuda'
@@ -168,16 +214,18 @@ elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
 print(f"using device: {device}")
 # device = 'cpu'
 
-enc = tiktoken.get_encoding('gpt2')
-with open('src/input.txt', 'r') as f:
-    text = f.read()
-text = text[:1000]
-tokens = enc.encode(text)
-B, T = 4, 32
-buf = torch.tensor(tokens[:B * T + 1])
-buf = buf.to(device)
-x = buf[:-1].view(B, T)
-y = buf[1: ].view(B, T)
+# enc = tiktoken.get_encoding('gpt2')
+# with open('src/input.txt', 'r') as f:
+#     text = f.read()
+# text = text[:1000]
+# tokens = enc.encode(text)
+# B, T = 4, 32
+# buf = torch.tensor(tokens[:B * T + 1])
+# buf = buf.to(device)
+# x = buf[:-1].view(B, T)
+# y = buf[1: ].view(B, T)
+
+train_loader = DataLoaderLite(B = 4, T = 32)
 
 model = GPT(GPTConfig)
 model.to(device)
@@ -185,6 +233,8 @@ model.to(device)
 
 optimizer = torch.optim.AdamW(model.parameters(), lr = 3e-4)
 for i in range(50):
+    x, y = train_loader.next_batch()
+    x, y = x.to(device), y.to(device)
     optimizer.zero_grad()
     logits, loss = model(x, y)
     loss.backward()
