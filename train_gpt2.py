@@ -5,6 +5,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import tiktoken
 import sys
+import time
+import code
 
 # ---
 # GPT2 is a decoder only transformer
@@ -225,21 +227,30 @@ print(f"using device: {device}")
 # x = buf[:-1].view(B, T)
 # y = buf[1: ].view(B, T)
 
-train_loader = DataLoaderLite(B = 4, T = 32)
+train_loader = DataLoaderLite(B = 16, T = 1024)
+
+torch.set_float32_matmul_precision('high')
 
 model = GPT(GPTConfig)
 model.to(device)
+model = torch.compile(model)
 # logits, loss = model(x, y)
 
 optimizer = torch.optim.AdamW(model.parameters(), lr = 3e-4)
 for i in range(50):
+    t0 = time.time()
     x, y = train_loader.next_batch()
     x, y = x.to(device), y.to(device)
     optimizer.zero_grad()
-    logits, loss = model(x, y)
+    with torch.autocast(device_type = device, dtype = torch.bfloat16):
+        logits, loss = model(x, y)
+        code.interact(local = locals())
     loss.backward()
     optimizer.step()
-    print(f"epoch {i: 2d}, loss: {loss.item()}")
+    torch.cuda.synchronize()
+    t1 = time.time()
+    dt = (t1 - t0) * 1000
+    print(f"step {i}, loss: {loss.item()}, dt: {dt: .2f}ms")
 
 print(loss)
 sys.exit(0)
